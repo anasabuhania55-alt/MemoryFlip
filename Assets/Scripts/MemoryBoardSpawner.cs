@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 public class MemoryBoardSpawner : MonoBehaviour
@@ -26,24 +29,30 @@ public class MemoryBoardSpawner : MonoBehaviour
     [SerializeField] private Camera gameplayCamera;
 
     [Range(0.3f, 0.95f)]
-    [SerializeField] private float boardWidthFill = 0.72f;
+    [SerializeField] private float boardWidthFill = 0.86f;
 
     [Range(0.3f, 0.95f)]
-    [SerializeField] private float boardHeightFill = 0.75f;
+    [SerializeField] private float boardHeightFill = 0.78f;
 
     [Range(0f, 1f)]
-    [SerializeField] private float horizontalGapRatio = 0.18f;
+    [SerializeField] private float horizontalGapRatio = 0.10f;
 
     [Range(0f, 1f)]
-    [SerializeField] private float verticalGapRatio = 0.16f;
+    [SerializeField] private float verticalGapRatio = 0.12f;
 
-    [SerializeField] private float minCardScale = 0.75f;
+    [SerializeField] private float minCardScale = 0.9f;
     [SerializeField] private float maxCardScale = 2.5f;
+
+    [Header("Round Start Hint")]
+    [SerializeField] private bool showHintBeforeRound = true;
+    [SerializeField] private float hintStartDelay = 0.25f;
+    [SerializeField] private float hintVisibleTime = 1.5f;
 
     private Sprite[] allSprites;
 
-    private readonly List<CardView> spawnedCards =
-        new List<CardView>();
+    private readonly List<CardView> spawnedCards = new List<CardView>();
+
+    private int boardVersion;
 
     private void Awake()
     {
@@ -61,6 +70,8 @@ public class MemoryBoardSpawner : MonoBehaviour
     [ContextMenu("Build Board")]
     public void BuildBoard()
     {
+        boardVersion++;
+
         int totalCards = columns * rows;
 
         if (totalCards % 2 != 0)
@@ -104,6 +115,7 @@ public class MemoryBoardSpawner : MonoBehaviour
             Debug.LogError(
                 $"المرحلة تحتاج {pairCount} وجوه مختلفة، لكن المتاح {availableFaces.Count} فقط."
             );
+
             return;
         }
 
@@ -113,11 +125,9 @@ public class MemoryBoardSpawner : MonoBehaviour
 
         Shuffle(availableFaces);
 
-        List<Sprite> selectedFaces =
-            availableFaces.GetRange(0, pairCount);
+        List<Sprite> selectedFaces = availableFaces.GetRange(0, pairCount);
 
-        List<int> shuffledPairIds =
-            CreateShuffledPairIds(pairCount);
+        List<int> shuffledPairIds = CreateShuffledPairIds(pairCount);
 
         CalculateBoardLayout(
             out float cardScale,
@@ -152,8 +162,83 @@ public class MemoryBoardSpawner : MonoBehaviour
 
             spawnedCards.Add(card);
         }
+
+        if (!Application.isPlaying)
+            return;
+
+        int currentBoardVersion = boardVersion;
+
+        if (showHintBeforeRound)
+        {
+            ShowRoundHintAsync(
+                currentBoardVersion,
+                this.GetCancellationTokenOnDestroy()
+            ).Forget();
+        }
+        else
+        {
+            gameManager.StartStageTimer();
+        }
     }
 
+    private async UniTaskVoid ShowRoundHintAsync(int version, CancellationToken token)
+{
+    try
+    {
+        gameManager.SetInputLocked(true);
+
+        await UniTask.Delay(
+            TimeSpan.FromSeconds(hintStartDelay),
+            cancellationToken: token
+        );
+
+        if (version != boardVersion)
+            return;
+
+        List<UniTask> flipUpTasks = new List<UniTask>();
+
+        foreach (CardView card in spawnedCards)
+        {
+            if (card == null)
+                continue;
+
+            flipUpTasks.Add(card.FlipUpAsync(token));
+        }
+
+        await UniTask.WhenAll(flipUpTasks);
+
+        await UniTask.Delay(
+            TimeSpan.FromSeconds(hintVisibleTime),
+            cancellationToken: token
+        );
+
+        if (version != boardVersion)
+            return;
+
+        List<UniTask> flipDownTasks = new List<UniTask>();
+
+        foreach (CardView card in spawnedCards)
+        {
+            if (card == null)
+                continue;
+
+            flipDownTasks.Add(card.FlipDownAsync(token));
+        }
+
+        await UniTask.WhenAll(flipDownTasks);
+    }
+    catch (OperationCanceledException)
+    {
+    }
+    finally
+    {
+        if (version == boardVersion)
+        {
+            gameManager.SetInputLocked(false);
+            gameManager.StartStageTimer();
+        }
+    }
+}
     private void CalculateBoardLayout(
         out float cardScale,
         out float horizontalSpacing,
@@ -172,28 +257,19 @@ public class MemoryBoardSpawner : MonoBehaviour
 
         if (targetCamera == null)
         {
-            Debug.LogWarning(
-                "ما لقينا Camera. اربط Main Camera داخل Gameplay Camera."
-            );
-
+            Debug.LogWarning("ما لقينا Camera. اربط Main Camera داخل Gameplay Camera.");
             return;
         }
 
         if (!targetCamera.orthographic)
         {
-            Debug.LogWarning(
-                "لازم الكاميرا تكون Orthographic حتى الـAuto Layout يشتغل بدقة."
-            );
-
+            Debug.LogWarning("لازم الكاميرا تكون Orthographic حتى الـAuto Layout يشتغل بدقة.");
             return;
         }
 
         if (prefabRenderer == null || prefabRenderer.sprite == null)
         {
-            Debug.LogWarning(
-                "ما لقينا SpriteRenderer أو Sprite داخل Card Prefab."
-            );
-
+            Debug.LogWarning("ما لقينا SpriteRenderer أو Sprite داخل Card Prefab.");
             return;
         }
 
@@ -217,6 +293,7 @@ public class MemoryBoardSpawner : MonoBehaviour
         float scaleByHeight = usableHeight / gridHeightAtScaleOne;
 
         cardScale = Mathf.Min(scaleByWidth, scaleByHeight);
+
         cardScale = Mathf.Clamp(
             cardScale,
             minCardScale,
@@ -261,7 +338,6 @@ public class MemoryBoardSpawner : MonoBehaviour
             }
         }
 
-        // حماية من الـSlices المكررة لنفس الكرت.
         HashSet<string> usedSpriteRects = new HashSet<string>();
 
         foreach (Sprite sprite in allSprites)
@@ -269,7 +345,6 @@ public class MemoryBoardSpawner : MonoBehaviour
             if (sprite == null)
                 continue;
 
-            // يمنع أي Back Card من الدخول كوجه أمامي.
             if (allBackSprites.Contains(sprite))
                 continue;
 
@@ -278,7 +353,6 @@ public class MemoryBoardSpawner : MonoBehaviour
             string rectKey =
                 $"{rect.x}_{rect.y}_{rect.width}_{rect.height}";
 
-            // يمنع الـSlice المكرر لنفس مكان الكرت.
             if (!usedSpriteRects.Add(rectKey))
                 continue;
 
@@ -305,24 +379,51 @@ public class MemoryBoardSpawner : MonoBehaviour
 
     private void ClearBoard()
     {
+        boardVersion++;
+
         foreach (CardView card in spawnedCards)
         {
             if (card == null)
                 continue;
 
-            // يخفي الكروت مباشرة قبل Destroy.
-            card.gameObject.SetActive(false);
-            Destroy(card.gameObject);
+            if (Application.isPlaying)
+            {
+                Destroy(card.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(card.gameObject);
+            }
         }
 
         spawnedCards.Clear();
+
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            Transform child = transform.GetChild(i);
+
+            if (Application.isPlaying)
+            {
+                Destroy(child.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(child.gameObject);
+            }
+        }
+    }
+
+    [ContextMenu("Clear Spawned Cards")]
+    private void ClearSpawnedCardsFromInspector()
+    {
+        ClearBoard();
     }
 
     private static void Shuffle<T>(List<T> list)
     {
         for (int i = list.Count - 1; i > 0; i--)
         {
-            int randomIndex = Random.Range(0, i + 1);
+            int randomIndex = UnityEngine.Random.Range(0, i + 1);
 
             T temporary = list[i];
             list[i] = list[randomIndex];
