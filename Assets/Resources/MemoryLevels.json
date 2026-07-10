@@ -1,0 +1,46 @@
+{
+  "levels": [
+    {
+      "columns": 3,
+      "rows": 2,
+      "timeLimitSeconds": 30,
+      "bonusTimePerMatch": 3
+    },
+    {
+      "columns": 4,
+      "rows": 3,
+      "timeLimitSeconds": 45,
+      "bonusTimePerMatch": 3
+    },
+    {
+      "columns": 6,
+      "rows": 3,
+      "timeLimitSeconds": 65,
+      "bonusTimePerMatch": 4
+    },
+    {
+      "columns": 6,
+      "rows": 4,
+      "timeLimitSeconds": 85,
+      "bonusTimePerMatch": 4
+    },
+    {
+      "columns": 10,
+      "rows": 3,
+      "timeLimitSeconds": 100,
+      "bonusTimePerMatch": 5
+    },
+    {
+      "columns": 9,
+      "rows": 4,
+      "timeLimitSeconds": 120,
+      "bonusTimePerMatch": 5
+    },
+    {
+      "columns": 8,
+      "rows": 5,
+      "timeLimitSeconds": 140,
+      "bonusTimePerMatch": 6
+    }
+  ]
+}

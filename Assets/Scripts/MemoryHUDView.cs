@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using DG.Tweening;
 using R3;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class MemoryHUDView : MonoBehaviour
 {
@@ -13,10 +15,37 @@ public class MemoryHUDView : MonoBehaviour
     [SerializeField] private TextMeshProUGUI stageText;
     [SerializeField] private TextMeshProUGUI movesText;
     [SerializeField] private TextMeshProUGUI pairsText;
-    [SerializeField] private TextMeshProUGUI timerText;
-    [SerializeField] private TextMeshProUGUI timeUpText;
+
+    [Header("Circle Timer")]
+    [SerializeField] private Image timerFillImage;
+    [SerializeField] private RectTransform timerRoot;
+
+    [Header("DOTween Timer Animation")]
+    [SerializeField] private float fillTweenDuration = 0.15f;
+    [SerializeField] private Ease fillEase = Ease.OutQuad;
+
+    [Header("Bonus Time Animation")]
+    [SerializeField] private float bonusPunchPower = 0.18f;
+    [SerializeField] private float bonusPunchDuration = 0.35f;
+    [SerializeField] private int bonusPunchVibrato = 8;
+
+    [Header("Low Time Warning")]
+    [SerializeField] private bool useLowTimePulse = true;
+    [Range(0f, 1f)]
+    [SerializeField] private float lowTimePercent = 0.25f;
+    [SerializeField] private float warningScale = 1.08f;
+    [SerializeField] private float warningPulseDuration = 0.45f;
 
     private readonly List<IDisposable> subscriptions = new List<IDisposable>();
+
+    private Vector3 timerOriginalScale;
+    private float previousTimeLeft = -1f;
+
+    private Tween fillTween;
+    private Tween bonusTween;
+    private Tween warningTween;
+
+    private bool isWarningPulsePlaying;
 
     private void Start()
     {
@@ -24,6 +53,11 @@ public class MemoryHUDView : MonoBehaviour
         {
             Debug.LogError("اربط MemoryGameManager داخل MemoryHUDView.");
             return;
+        }
+
+        if (timerRoot != null)
+        {
+            timerOriginalScale = timerRoot.localScale;
         }
 
         subscriptions.Add(
@@ -52,13 +86,13 @@ public class MemoryHUDView : MonoBehaviour
 
         subscriptions.Add(
             gameManager.TimeLeft.Subscribe(
-                new HudObserver<float>(_ => RefreshTimerText())
+                new HudObserver<float>(_ => RefreshTimerCircle())
             )
         );
 
         subscriptions.Add(
-            gameManager.IsTimeUp.Subscribe(
-                new HudObserver<bool>(_ => RefreshTimeUpText())
+            gameManager.StageTimeLimit.Subscribe(
+                new HudObserver<float>(_ => RefreshTimerCircle())
             )
         );
 
@@ -70,8 +104,7 @@ public class MemoryHUDView : MonoBehaviour
         RefreshStageText();
         RefreshMovesText();
         RefreshPairsText();
-        RefreshTimerText();
-        RefreshTimeUpText();
+        RefreshTimerCircle();
     }
 
     private void RefreshStageText()
@@ -101,37 +134,140 @@ public class MemoryHUDView : MonoBehaviour
             $"Pairs: {gameManager.MatchedPairs.Value} / {gameManager.TotalPairs.Value}";
     }
 
-    private void RefreshTimerText()
+    private void RefreshTimerCircle()
     {
-        if (timerText == null)
+        if (timerFillImage == null)
             return;
 
-        int totalSeconds = Mathf.CeilToInt(gameManager.TimeLeft.Value);
+        float maxTime = gameManager.StageTimeLimit.Value;
 
-        int minutes = totalSeconds / 60;
-        int seconds = totalSeconds % 60;
+        if (maxTime <= 0f)
+        {
+            timerFillImage.fillAmount = 0f;
+            previousTimeLeft = gameManager.TimeLeft.Value;
+            StopWarningPulse();
+            return;
+        }
 
-        timerText.text =
-            $"Time: {minutes:00}:{seconds:00}";
+        float currentTime = Mathf.Clamp(
+            gameManager.TimeLeft.Value,
+            0f,
+            maxTime
+        );
+
+        float targetFill = Mathf.Clamp01(currentTime / maxTime);
+
+        bool gotBonusTime =
+            previousTimeLeft >= 0f &&
+            currentTime > previousTimeLeft + 0.05f;
+
+        AnimateTimerFill(targetFill, gotBonusTime);
+
+        if (gotBonusTime)
+        {
+            PlayBonusTimeAnimation();
+        }
+
+        UpdateLowTimeWarning(targetFill);
+
+        previousTimeLeft = currentTime;
     }
 
-    private void RefreshTimeUpText()
+    private void AnimateTimerFill(float targetFill, bool gotBonusTime)
     {
-        if (timeUpText == null)
+        if (timerFillImage == null)
             return;
 
-        bool isTimeUp = gameManager.IsTimeUp.Value;
+        float difference = Mathf.Abs(timerFillImage.fillAmount - targetFill);
 
-        timeUpText.gameObject.SetActive(isTimeUp);
+        if (!gotBonusTime && difference < 0.01f)
+            return;
 
-        if (isTimeUp)
+        fillTween?.Kill();
+
+        fillTween = timerFillImage
+            .DOFillAmount(targetFill, fillTweenDuration)
+            .SetEase(fillEase);
+    }
+
+    private void PlayBonusTimeAnimation()
+    {
+        if (timerRoot == null)
+            return;
+
+        bonusTween?.Kill();
+
+        timerRoot.localScale = timerOriginalScale;
+
+        bonusTween = timerRoot
+            .DOPunchScale(
+                Vector3.one * bonusPunchPower,
+                bonusPunchDuration,
+                bonusPunchVibrato,
+                0.8f
+            )
+            .SetEase(Ease.OutBack);
+    }
+
+    private void UpdateLowTimeWarning(float fillAmount)
+    {
+        if (!useLowTimePulse || timerRoot == null)
+            return;
+
+        bool shouldPulse =
+            fillAmount > 0f &&
+            fillAmount <= lowTimePercent &&
+            !gameManager.IsGameFinished.Value &&
+            !gameManager.IsTimeUp.Value;
+
+        if (shouldPulse)
         {
-            timeUpText.text = "TIME UP!";
+            StartWarningPulse();
+        }
+        else
+        {
+            StopWarningPulse();
+        }
+    }
+
+    private void StartWarningPulse()
+    {
+        if (isWarningPulsePlaying)
+            return;
+
+        isWarningPulsePlaying = true;
+
+        warningTween?.Kill();
+
+        warningTween = timerRoot
+            .DOScale(timerOriginalScale * warningScale, warningPulseDuration)
+            .SetLoops(-1, LoopType.Yoyo)
+            .SetEase(Ease.InOutSine);
+    }
+
+    private void StopWarningPulse()
+    {
+        if (!isWarningPulsePlaying)
+            return;
+
+        isWarningPulsePlaying = false;
+
+        warningTween?.Kill();
+        warningTween = null;
+
+        if (timerRoot != null)
+        {
+            timerRoot.DOScale(timerOriginalScale, 0.15f)
+                .SetEase(Ease.OutQuad);
         }
     }
 
     private void OnDestroy()
     {
+        fillTween?.Kill();
+        bonusTween?.Kill();
+        warningTween?.Kill();
+
         foreach (IDisposable subscription in subscriptions)
         {
             subscription?.Dispose();

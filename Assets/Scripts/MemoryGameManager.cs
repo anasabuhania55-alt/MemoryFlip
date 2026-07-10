@@ -7,18 +7,7 @@ using UnityEngine;
 
 public class MemoryGameManager : MonoBehaviour
 {
-    [Serializable]
-    public struct StageLayout
-    {
-        public int columns;
-        public int rows;
-
-        [Header("Timer")]
-        public float timeLimitSeconds;
-        public float bonusTimePerMatch;
-
-        public int TotalCards => columns * rows;
-    }
+    #region Inspector Fields
 
     [Header("Debug Stage Navigation")]
     [SerializeField] private int debugStageNumber = 1;
@@ -26,24 +15,12 @@ public class MemoryGameManager : MonoBehaviour
     [Header("References")]
     [SerializeField] private MemoryBoardSpawner boardSpawner;
 
+    [Header("Levels JSON")]
+    [Tooltip("اسم ملف JSON داخل Resources بدون .json")]
+    [SerializeField] private string levelsJsonResourcePath = "MemoryLevels";
+
     [Header("Save Progress")]
     [SerializeField] private bool loadSavedProgressOnStart = true;
-
-    private const string SavedStageKey = "MemoryFlip_SavedStage";
-    private const string GameCompletedKey = "MemoryFlip_GameCompleted";
-
-    [Header("Stages")]
-    [SerializeField]
-    private StageLayout[] stages =
-    {
-        new StageLayout { columns = 3,  rows = 2, timeLimitSeconds = 30f,  bonusTimePerMatch = 3f },
-        new StageLayout { columns = 4,  rows = 3, timeLimitSeconds = 45f,  bonusTimePerMatch = 3f },
-        new StageLayout { columns = 6,  rows = 3, timeLimitSeconds = 65f,  bonusTimePerMatch = 4f },
-        new StageLayout { columns = 6,  rows = 4, timeLimitSeconds = 85f,  bonusTimePerMatch = 4f },
-        new StageLayout { columns = 10, rows = 3, timeLimitSeconds = 100f, bonusTimePerMatch = 5f },
-        new StageLayout { columns = 9,  rows = 4, timeLimitSeconds = 120f, bonusTimePerMatch = 5f },
-        new StageLayout { columns = 8,  rows = 5, timeLimitSeconds = 140f, bonusTimePerMatch = 6f }
-    };
 
     [Header("Gameplay")]
     [SerializeField] private float wrongCardsDelay = 0.8f;
@@ -55,19 +32,40 @@ public class MemoryGameManager : MonoBehaviour
     [SerializeField] private AudioClip correctMatchSfx;
     [SerializeField] private AudioClip wrongMatchSfx;
 
+    #endregion
+
+
+    #region Save Keys
+
+    private const string SavedStageKey = "MemoryFlip_SavedStage";
+    private const string GameCompletedKey = "MemoryFlip_GameCompleted";
+
+    #endregion
+
+
+    #region Reactive Properties - R3
+
     public ReactiveProperty<int> Moves { get; } = new ReactiveProperty<int>(0);
     public ReactiveProperty<int> MatchedPairs { get; } = new ReactiveProperty<int>(0);
     public ReactiveProperty<int> TotalPairs { get; } = new ReactiveProperty<int>(0);
 
-    public ReactiveProperty<bool> IsGameFinished { get; } = new ReactiveProperty<bool>(false);
-    public ReactiveProperty<bool> IsAllStagesFinished { get; } = new ReactiveProperty<bool>(false);
-
     public ReactiveProperty<int> CurrentStage { get; } = new ReactiveProperty<int>(1);
 
     public ReactiveProperty<float> TimeLeft { get; } = new ReactiveProperty<float>(0f);
+    public ReactiveProperty<float> StageTimeLimit { get; } = new ReactiveProperty<float>(0f);
+
+    public ReactiveProperty<bool> IsGameFinished { get; } = new ReactiveProperty<bool>(false);
+    public ReactiveProperty<bool> IsAllStagesFinished { get; } = new ReactiveProperty<bool>(false);
     public ReactiveProperty<bool> IsTimeUp { get; } = new ReactiveProperty<bool>(false);
 
-    public int TotalStages => stages != null ? stages.Length : 0;
+    public int TotalStages => levels != null ? levels.Length : 0;
+
+    #endregion
+
+
+    #region Private Variables
+
+    private MemoryLevelData[] levels;
 
     private readonly List<CardView> selectedCards = new List<CardView>();
 
@@ -81,10 +79,38 @@ public class MemoryGameManager : MonoBehaviour
 
     private CancellationTokenSource timerCts;
 
+    #endregion
+
+
+    #region Unity Lifecycle
+
     private void Start()
     {
         StartGame();
     }
+
+    private void OnDestroy()
+    {
+        StopStageTimer();
+
+        Moves.Dispose();
+        MatchedPairs.Dispose();
+        TotalPairs.Dispose();
+
+        CurrentStage.Dispose();
+
+        TimeLeft.Dispose();
+        StageTimeLimit.Dispose();
+
+        IsGameFinished.Dispose();
+        IsAllStagesFinished.Dispose();
+        IsTimeUp.Dispose();
+    }
+
+    #endregion
+
+
+    #region Game Flow
 
     public void StartGame()
     {
@@ -94,11 +120,8 @@ public class MemoryGameManager : MonoBehaviour
             return;
         }
 
-        if (stages == null || stages.Length == 0)
-        {
-            Debug.LogError("ما في مراحل داخل Stages.");
+        if (!LoadLevelsFromJson())
             return;
-        }
 
         StopStageTimer();
 
@@ -120,26 +143,38 @@ public class MemoryGameManager : MonoBehaviour
 
     private void LoadCurrentStage()
     {
-        StageLayout stage = stages[currentStageIndex];
+        if (!EnsureLevelsLoaded())
+            return;
 
-        if (stage.TotalCards <= 0 || stage.TotalCards % 2 != 0)
+        currentStageIndex = Mathf.Clamp(
+            currentStageIndex,
+            0,
+            levels.Length - 1
+        );
+
+        MemoryLevelData level = levels[currentStageIndex];
+
+        if (level.TotalCards <= 0 || level.TotalCards % 2 != 0)
         {
-            Debug.LogError($"Stage {currentStageIndex + 1} لازم يكون عدد كروته زوجي.");
+            Debug.LogError($"Level {currentStageIndex + 1} لازم يكون عدد كروته زوجي.");
             return;
         }
 
         CurrentStage.Value = currentStageIndex + 1;
 
         Debug.Log(
-            $"Starting Stage {CurrentStage.Value}: {stage.TotalCards} Cards | Time: {stage.timeLimitSeconds}"
+            $"Starting Level {CurrentStage.Value}: {level.TotalCards} Cards | Time: {level.timeLimitSeconds}"
         );
 
-        boardSpawner.BuildBoard(stage.columns, stage.rows);
+        boardSpawner.BuildBoard(level.columns, level.rows);
     }
 
     public void StartNewGame(int newTotalPairs)
     {
         StopStageTimer();
+
+        if (!EnsureLevelsLoaded())
+            return;
 
         totalPairs = newTotalPairs;
 
@@ -150,8 +185,10 @@ public class MemoryGameManager : MonoBehaviour
         IsGameFinished.Value = false;
         IsTimeUp.Value = false;
 
-        StageLayout stage = stages[currentStageIndex];
-        TimeLeft.Value = stage.timeLimitSeconds;
+        MemoryLevelData level = levels[currentStageIndex];
+
+        StageTimeLimit.Value = level.timeLimitSeconds;
+        TimeLeft.Value = level.timeLimitSeconds;
 
         selectedCards.Clear();
 
@@ -161,10 +198,89 @@ public class MemoryGameManager : MonoBehaviour
         isInputLocked = false;
     }
 
-    public void SetInputLocked(bool locked)
+    private async UniTaskVoid AdvanceToNextStageAsync(CancellationToken token)
     {
-        isInputLocked = locked;
+        try
+        {
+            isStageTransitioning = true;
+            isInputLocked = true;
+
+            await UniTask.Delay(
+                TimeSpan.FromSeconds(nextStageDelay),
+                cancellationToken: token
+            );
+
+            bool isLastStage = currentStageIndex >= levels.Length - 1;
+
+            if (isLastStage)
+            {
+                SaveGameCompleted();
+
+                IsAllStagesFinished.Value = true;
+
+                Debug.Log("Congratulations! You completed all levels.");
+
+                return;
+            }
+
+            currentStageIndex++;
+
+            SaveReachedStage(currentStageIndex + 1);
+
+            LoadCurrentStage();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            isStageTransitioning = false;
+        }
     }
+
+    #endregion
+
+
+    #region JSON Levels Loading
+
+    private bool LoadLevelsFromJson()
+    {
+        TextAsset jsonFile = Resources.Load<TextAsset>(levelsJsonResourcePath);
+
+        if (jsonFile == null)
+        {
+            Debug.LogError($"ما لقينا ملف JSON داخل Resources باسم: {levelsJsonResourcePath}");
+            return false;
+        }
+
+        MemoryLevelDatabase database =
+            JsonUtility.FromJson<MemoryLevelDatabase>(jsonFile.text);
+
+        if (database == null || database.levels == null || database.levels.Length == 0)
+        {
+            Debug.LogError("ملف الليفلات فاضي أو فيه مشكلة بالـJSON.");
+            return false;
+        }
+
+        levels = database.levels;
+
+        Debug.Log($"Loaded {levels.Length} levels from JSON.");
+
+        return true;
+    }
+
+    private bool EnsureLevelsLoaded()
+    {
+        if (levels != null && levels.Length > 0)
+            return true;
+
+        return LoadLevelsFromJson();
+    }
+
+    #endregion
+
+
+    #region Card Input And Flip
 
     public void TryFlip(CardView card)
     {
@@ -236,42 +352,11 @@ public class MemoryGameManager : MonoBehaviour
 
             if (isMatch)
             {
-                PlaySfx(correctMatchSfx);
-
-                firstCard.MarkMatched();
-                secondCard.MarkMatched();
-
-                MatchedPairs.Value++;
-
-                AddBonusTimeForMatch();
-
-                selectedCards.Clear();
-
-                if (MatchedPairs.Value >= totalPairs)
-                {
-                    IsGameFinished.Value = true;
-
-                    StopStageTimer();
-
-                    AdvanceToNextStageAsync(token).Forget();
-                }
-
+                HandleCorrectMatch(firstCard, secondCard, token);
                 return;
             }
 
-            PlaySfx(wrongMatchSfx);
-
-            await UniTask.Delay(
-                TimeSpan.FromSeconds(wrongCardsDelay),
-                cancellationToken: token
-            );
-
-            await UniTask.WhenAll(
-                firstCard.FlipDownAsync(token),
-                secondCard.FlipDownAsync(token)
-            );
-
-            selectedCards.Clear();
+            await HandleWrongMatchAsync(firstCard, secondCard, token);
         }
         catch (OperationCanceledException)
         {
@@ -282,49 +367,65 @@ public class MemoryGameManager : MonoBehaviour
         }
     }
 
-    private async UniTaskVoid AdvanceToNextStageAsync(CancellationToken token)
+    private void HandleCorrectMatch(CardView firstCard, CardView secondCard, CancellationToken token)
     {
-        try
+        PlaySfx(correctMatchSfx);
+
+        firstCard.MarkMatched();
+        secondCard.MarkMatched();
+
+        MatchedPairs.Value++;
+
+        AddBonusTimeForMatch();
+
+        selectedCards.Clear();
+
+        if (MatchedPairs.Value >= totalPairs)
         {
-            isStageTransitioning = true;
-            isInputLocked = true;
+            IsGameFinished.Value = true;
 
-            await UniTask.Delay(
-                TimeSpan.FromSeconds(nextStageDelay),
-                cancellationToken: token
-            );
+            StopStageTimer();
 
-            bool isLastStage = currentStageIndex >= stages.Length - 1;
-
-            if (isLastStage)
-            {
-                SaveGameCompleted();
-
-                IsAllStagesFinished.Value = true;
-
-                Debug.Log("Congratulations! You completed all stages.");
-
-                return;
-            }
-
-            currentStageIndex++;
-
-            SaveReachedStage(currentStageIndex + 1);
-
-            LoadCurrentStage();
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        finally
-        {
-            isStageTransitioning = false;
+            AdvanceToNextStageAsync(token).Forget();
         }
     }
+
+    private async UniTask HandleWrongMatchAsync(
+        CardView firstCard,
+        CardView secondCard,
+        CancellationToken token)
+    {
+        PlaySfx(wrongMatchSfx);
+
+        await UniTask.Delay(
+            TimeSpan.FromSeconds(wrongCardsDelay),
+            cancellationToken: token
+        );
+
+        await UniTask.WhenAll(
+            firstCard.FlipDownAsync(token),
+            secondCard.FlipDownAsync(token)
+        );
+
+        selectedCards.Clear();
+    }
+
+    public void SetInputLocked(bool locked)
+    {
+        isInputLocked = locked;
+    }
+
+    #endregion
+
+
+    #region Timer System
 
     public void StartStageTimer()
     {
         StopStageTimer();
+
+        if (!EnsureLevelsLoaded())
+            return;
 
         if (IsGameFinished.Value)
             return;
@@ -332,9 +433,9 @@ public class MemoryGameManager : MonoBehaviour
         if (IsTimeUp.Value)
             return;
 
-        StageLayout stage = stages[currentStageIndex];
+        MemoryLevelData level = levels[currentStageIndex];
 
-        if (stage.timeLimitSeconds <= 0f)
+        if (level.timeLimitSeconds <= 0f)
             return;
 
         timerCts = CancellationTokenSource.CreateLinkedTokenSource(
@@ -383,17 +484,20 @@ public class MemoryGameManager : MonoBehaviour
 
     private void AddBonusTimeForMatch()
     {
+        if (!EnsureLevelsLoaded())
+            return;
+
         if (IsGameFinished.Value || IsTimeUp.Value)
             return;
 
-        StageLayout stage = stages[currentStageIndex];
+        MemoryLevelData level = levels[currentStageIndex];
 
-        if (stage.bonusTimePerMatch <= 0f)
+        if (level.bonusTimePerMatch <= 0f)
             return;
 
-        TimeLeft.Value += stage.bonusTimePerMatch;
+        TimeLeft.Value += level.bonusTimePerMatch;
 
-        Debug.Log($"+{stage.bonusTimePerMatch} seconds");
+        Debug.Log($"+{level.bonusTimePerMatch} seconds");
     }
 
     private void OnTimeUp()
@@ -409,22 +513,22 @@ public class MemoryGameManager : MonoBehaviour
         Debug.Log("Time Up!");
     }
 
-    private void PlaySfx(AudioClip clip)
-    {
-        if (sfxSource == null || clip == null)
-            return;
+    #endregion
 
-        sfxSource.PlayOneShot(clip);
-    }
+
+    #region Save Progress
 
     private int GetSavedStageIndex()
     {
+        if (!EnsureLevelsLoaded())
+            return 0;
+
         int savedStageNumber = PlayerPrefs.GetInt(SavedStageKey, 1);
 
         savedStageNumber = Mathf.Clamp(
             savedStageNumber,
             1,
-            stages.Length
+            levels.Length
         );
 
         return savedStageNumber - 1;
@@ -432,13 +536,13 @@ public class MemoryGameManager : MonoBehaviour
 
     private void SaveReachedStage(int stageNumber)
     {
-        if (stages == null || stages.Length == 0)
+        if (!EnsureLevelsLoaded())
             return;
 
         int clampedStageNumber = Mathf.Clamp(
             stageNumber,
             1,
-            stages.Length
+            levels.Length
         );
 
         int savedStageNumber = PlayerPrefs.GetInt(SavedStageKey, 1);
@@ -450,12 +554,15 @@ public class MemoryGameManager : MonoBehaviour
         PlayerPrefs.SetInt(GameCompletedKey, 0);
         PlayerPrefs.Save();
 
-        Debug.Log($"Saved Progress: Stage {clampedStageNumber}");
+        Debug.Log($"Saved Progress: Level {clampedStageNumber}");
     }
 
     private void SaveGameCompleted()
     {
-        PlayerPrefs.SetInt(SavedStageKey, stages.Length);
+        if (!EnsureLevelsLoaded())
+            return;
+
+        PlayerPrefs.SetInt(SavedStageKey, levels.Length);
         PlayerPrefs.SetInt(GameCompletedKey, 1);
         PlayerPrefs.Save();
 
@@ -494,6 +601,11 @@ public class MemoryGameManager : MonoBehaviour
         LoadCurrentStage();
     }
 
+    #endregion
+
+
+    #region Debug Stage Navigation
+
     [ContextMenu("Debug/Load Selected Stage")]
     private void DebugLoadSelectedStage()
     {
@@ -514,11 +626,8 @@ public class MemoryGameManager : MonoBehaviour
 
     public void LoadStageByNumber(int stageNumber)
     {
-        if (stages == null || stages.Length == 0)
-        {
-            Debug.LogError("ما في Stages معرفة داخل MemoryGameManager.");
+        if (!EnsureLevelsLoaded())
             return;
-        }
 
         StopStageTimer();
 
@@ -527,7 +636,7 @@ public class MemoryGameManager : MonoBehaviour
         stageIndex = Mathf.Clamp(
             stageIndex,
             0,
-            stages.Length - 1
+            levels.Length - 1
         );
 
         currentStageIndex = stageIndex;
@@ -546,20 +655,18 @@ public class MemoryGameManager : MonoBehaviour
         LoadCurrentStage();
     }
 
-    private void OnDestroy()
+    #endregion
+
+
+    #region Sound
+
+    private void PlaySfx(AudioClip clip)
     {
-        StopStageTimer();
+        if (sfxSource == null || clip == null)
+            return;
 
-        Moves.Dispose();
-        MatchedPairs.Dispose();
-        TotalPairs.Dispose();
-
-        IsGameFinished.Dispose();
-        IsAllStagesFinished.Dispose();
-
-        CurrentStage.Dispose();
-
-        TimeLeft.Dispose();
-        IsTimeUp.Dispose();
+        sfxSource.PlayOneShot(clip);
     }
+
+    #endregion
 }
