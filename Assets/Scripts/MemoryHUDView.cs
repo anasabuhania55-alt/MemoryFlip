@@ -11,6 +11,9 @@ public class MemoryHUDView : MonoBehaviour
     [Header("References")]
     [SerializeField] private MemoryGameManager gameManager;
 
+    [Header("HUD Groups")]
+    [SerializeField] private GameObject statsRoot;
+
     [Header("Texts")]
     [SerializeField] private TextMeshProUGUI stageText;
     [SerializeField] private TextMeshProUGUI movesText;
@@ -31,8 +34,10 @@ public class MemoryHUDView : MonoBehaviour
 
     [Header("Low Time Warning")]
     [SerializeField] private bool useLowTimePulse = true;
+
     [Range(0f, 1f)]
     [SerializeField] private float lowTimePercent = 0.25f;
+
     [SerializeField] private float warningScale = 1.08f;
     [SerializeField] private float warningPulseDuration = 0.45f;
 
@@ -59,6 +64,8 @@ public class MemoryHUDView : MonoBehaviour
         {
             timerOriginalScale = timerRoot.localScale;
         }
+
+        SetupTimerImage();
 
         subscriptions.Add(
             gameManager.CurrentStage.Subscribe(
@@ -96,7 +103,24 @@ public class MemoryHUDView : MonoBehaviour
             )
         );
 
+        subscriptions.Add(
+            gameManager.IsStageComplete.Subscribe(
+                new HudObserver<bool>(_ => RefreshHudVisibility())
+            )
+        );
+
         RefreshAll();
+    }
+
+    private void SetupTimerImage()
+    {
+        if (timerFillImage == null)
+            return;
+
+        timerFillImage.type = Image.Type.Filled;
+        timerFillImage.fillMethod = Image.FillMethod.Radial360;
+        timerFillImage.fillOrigin = (int)Image.Origin360.Right;
+        timerFillImage.fillClockwise = false;
     }
 
     private void RefreshAll()
@@ -105,6 +129,7 @@ public class MemoryHUDView : MonoBehaviour
         RefreshMovesText();
         RefreshPairsText();
         RefreshTimerCircle();
+        RefreshHudVisibility();
     }
 
     private void RefreshStageText()
@@ -132,6 +157,16 @@ public class MemoryHUDView : MonoBehaviour
 
         pairsText.text =
             $"Pairs: {gameManager.MatchedPairs.Value} / {gameManager.TotalPairs.Value}";
+    }
+
+    private void RefreshHudVisibility()
+    {
+        if (statsRoot == null)
+            return;
+
+        bool shouldShowStats = !gameManager.IsStageComplete.Value;
+
+        statsRoot.SetActive(shouldShowStats);
     }
 
     private void RefreshTimerCircle()
@@ -218,7 +253,8 @@ public class MemoryHUDView : MonoBehaviour
             fillAmount > 0f &&
             fillAmount <= lowTimePercent &&
             !gameManager.IsGameFinished.Value &&
-            !gameManager.IsTimeUp.Value;
+            !gameManager.IsTimeUp.Value &&
+            !gameManager.IsStageComplete.Value;
 
         if (shouldPulse)
         {
