@@ -53,12 +53,12 @@ public class StageCompletePanelView : MonoBehaviour
 
         if (nextStageButton != null)
         {
-            nextStageButton.onClick.AddListener(gameManager.ContinueToNextStage);
+            nextStageButton.onClick.AddListener(gameManager.ContinueToNextStageFromButton);
         }
 
         if (mainMenuButton != null)
         {
-            mainMenuButton.onClick.AddListener(gameManager.ReturnToMainMenu);
+            mainMenuButton.onClick.AddListener(gameManager.ReturnToMainMenuFromButton);
         }
 
         subscriptions.Add(
@@ -89,16 +89,17 @@ public class StageCompletePanelView : MonoBehaviour
             panelRoot.SetActive(true);
         }
 
-        if (panelTransform != null)
-        {
-            panelTransform.localScale = Vector3.one * startScale;
+        if (panelTransform == null)
+            return;
 
-            scaleTween?.Kill();
+        scaleTween?.Kill();
 
-            scaleTween = panelTransform
-                .DOScale(Vector3.one, showDuration)
-                .SetEase(Ease.OutBack);
-        }
+        panelTransform.localScale = Vector3.one * startScale;
+
+        scaleTween = panelTransform
+            .DOScale(Vector3.one, showDuration)
+            .SetEase(Ease.OutBack)
+            .SetUpdate(true);
     }
 
     private void HidePanel()
@@ -170,12 +171,12 @@ public class StageCompletePanelView : MonoBehaviour
         {
             if (nextStageButton != null)
             {
-                nextStageButton.onClick.RemoveListener(gameManager.ContinueToNextStage);
+                nextStageButton.onClick.RemoveListener(gameManager.ContinueToNextStageFromButton);
             }
 
             if (mainMenuButton != null)
             {
-                mainMenuButton.onClick.RemoveListener(gameManager.ReturnToMainMenu);
+                mainMenuButton.onClick.RemoveListener(gameManager.ReturnToMainMenuFromButton);
             }
         }
 

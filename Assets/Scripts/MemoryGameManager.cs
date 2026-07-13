@@ -36,8 +36,14 @@ public class MemoryGameManager : MonoBehaviour
     [SerializeField] private AudioClip correctMatchSfx;
     [SerializeField] private AudioClip wrongMatchSfx;
 
-    #endregion
+    [Header("UI Sound Effects")]
+    [SerializeField] private AudioClip buttonClickSfx;
+    [SerializeField] private float buttonClickDelay = 0.08f;
 
+    [Header("Hint Sound Effects")]
+    [SerializeField] private AudioClip hintRevealSfx;
+
+    #endregion
 
     #region Save Keys
 
@@ -45,7 +51,6 @@ public class MemoryGameManager : MonoBehaviour
     private const string GameCompletedKey = "MemoryFlip_GameCompleted";
 
     #endregion
-
 
     #region Reactive Properties - R3
 
@@ -67,6 +72,8 @@ public class MemoryGameManager : MonoBehaviour
     public ReactiveProperty<int> StageCompleteMoves { get; } = new ReactiveProperty<int>(0);
     public ReactiveProperty<float> StageCompleteTimeLeft { get; } = new ReactiveProperty<float>(0f);
 
+    public ReactiveProperty<bool> IsPaused { get; } = new ReactiveProperty<bool>(false);
+
     public int TotalStages => levels != null ? levels.Length : 0;
 
     public bool HasNextStage =>
@@ -74,7 +81,6 @@ public class MemoryGameManager : MonoBehaviour
         currentStageIndex < levels.Length - 1;
 
     #endregion
-
 
     #region Private Variables
 
@@ -86,6 +92,7 @@ public class MemoryGameManager : MonoBehaviour
     private bool isCheckingPair;
     private bool isStageTransitioning;
     private bool isInputLocked;
+    private bool inputLockBeforePause;
 
     private int totalPairs;
     private int currentStageIndex;
@@ -93,7 +100,6 @@ public class MemoryGameManager : MonoBehaviour
     private CancellationTokenSource timerCts;
 
     #endregion
-
 
     #region Unity Lifecycle
 
@@ -104,6 +110,8 @@ public class MemoryGameManager : MonoBehaviour
 
     private void OnDestroy()
     {
+        Time.timeScale = 1f;
+
         StopStageTimer();
 
         Moves.Dispose();
@@ -114,7 +122,6 @@ public class MemoryGameManager : MonoBehaviour
 
         TimeLeft.Dispose();
         StageTimeLimit.Dispose();
-
         IsGameFinished.Dispose();
         IsAllStagesFinished.Dispose();
         IsTimeUp.Dispose();
@@ -123,15 +130,18 @@ public class MemoryGameManager : MonoBehaviour
         CompletedStageNumber.Dispose();
         StageCompleteMoves.Dispose();
         StageCompleteTimeLeft.Dispose();
+
+        IsPaused.Dispose();
     }
 
     #endregion
-
 
     #region Game Flow
 
     public void StartGame()
     {
+        Time.timeScale = 1f;
+
         if (boardSpawner == null)
         {
             Debug.LogError("اربط Board Spawner داخل MemoryGameManager.");
@@ -201,6 +211,7 @@ public class MemoryGameManager : MonoBehaviour
         IsGameFinished.Value = false;
         IsTimeUp.Value = false;
         IsStageComplete.Value = false;
+        IsPaused.Value = false;
 
         MemoryLevelData level = levels[currentStageIndex];
 
@@ -275,6 +286,9 @@ public class MemoryGameManager : MonoBehaviour
             return;
         }
 
+        Time.timeScale = 1f;
+        IsPaused.Value = false;
+
         StopStageTimer();
 
         currentStageIndex++;
@@ -297,6 +311,9 @@ public class MemoryGameManager : MonoBehaviour
     {
         StopStageTimer();
 
+        Time.timeScale = 1f;
+        IsPaused.Value = false;
+
         SceneManager.LoadScene(mainMenuSceneName);
     }
 
@@ -308,15 +325,98 @@ public class MemoryGameManager : MonoBehaviour
         isCheckingPair = false;
         isStageTransitioning = false;
         isInputLocked = false;
+        inputLockBeforePause = false;
 
         IsAllStagesFinished.Value = false;
         IsTimeUp.Value = false;
         IsGameFinished.Value = false;
         IsStageComplete.Value = false;
+        IsPaused.Value = false;
     }
 
     #endregion
 
+    #region Button Actions With Sound
+
+    public void PauseGameFromButton()
+    {
+        PlayButtonClickSound();
+        PauseGame();
+    }
+
+    public void ResumeGameFromButton()
+    {
+        PlayButtonClickSound();
+        ResumeGame();
+    }
+
+    public void ContinueToNextStageFromButton()
+    {
+        PlayButtonClickSound();
+        ContinueToNextStage();
+    }
+
+    public void ReturnToMainMenuFromButton()
+    {
+        ReturnToMainMenuFromButtonAsync(
+            this.GetCancellationTokenOnDestroy()
+        ).Forget();
+    }
+
+    private async UniTaskVoid ReturnToMainMenuFromButtonAsync(CancellationToken token)
+    {
+        PlayButtonClickSound();
+
+        try
+        {
+            await UniTask.Delay(
+                TimeSpan.FromSeconds(buttonClickDelay),
+                delayType: DelayType.UnscaledDeltaTime,
+                cancellationToken: token
+            );
+
+            ReturnToMainMenu();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    #endregion
+
+    #region Pause System
+
+    public void PauseGame()
+    {
+        if (IsPaused.Value)
+            return;
+
+        if (IsStageComplete.Value || IsTimeUp.Value || IsAllStagesFinished.Value)
+            return;
+
+        if (isStageTransitioning)
+            return;
+
+        inputLockBeforePause = isInputLocked;
+
+        IsPaused.Value = true;
+        isInputLocked = true;
+
+        Time.timeScale = 0f;
+    }
+
+    public void ResumeGame()
+    {
+        if (!IsPaused.Value)
+            return;
+
+        Time.timeScale = 1f;
+
+        IsPaused.Value = false;
+        isInputLocked = inputLockBeforePause;
+    }
+
+    #endregion
 
     #region JSON Levels Loading
 
@@ -356,7 +456,6 @@ public class MemoryGameManager : MonoBehaviour
 
     #endregion
 
-
     #region Card Input And Flip
 
     public void TryFlip(CardView card)
@@ -371,6 +470,9 @@ public class MemoryGameManager : MonoBehaviour
             return;
 
         if (IsTimeUp.Value)
+            return;
+
+        if (IsPaused.Value)
             return;
 
         if (isFlipping || isCheckingPair || isStageTransitioning)
@@ -488,11 +590,13 @@ public class MemoryGameManager : MonoBehaviour
 
     public void SetInputLocked(bool locked)
     {
+        if (IsPaused.Value)
+            return;
+
         isInputLocked = locked;
     }
 
     #endregion
-
 
     #region Timer System
 
@@ -507,6 +611,9 @@ public class MemoryGameManager : MonoBehaviour
             return;
 
         if (IsTimeUp.Value)
+            return;
+
+        if (IsPaused.Value)
             return;
 
         MemoryLevelData level = levels[currentStageIndex];
@@ -525,11 +632,15 @@ public class MemoryGameManager : MonoBehaviour
     {
         try
         {
-            while (TimeLeft.Value > 0f && !IsGameFinished.Value && !IsTimeUp.Value)
+            while (
+                TimeLeft.Value > 0f &&
+                !IsGameFinished.Value &&
+                !IsTimeUp.Value
+            )
             {
                 await UniTask.Yield(PlayerLoopTiming.Update, token);
 
-                if (isInputLocked || isStageTransitioning)
+                if (isInputLocked || isStageTransitioning || IsPaused.Value)
                     continue;
 
                 TimeLeft.Value -= Time.deltaTime;
@@ -563,7 +674,7 @@ public class MemoryGameManager : MonoBehaviour
         if (!EnsureLevelsLoaded())
             return;
 
-        if (IsGameFinished.Value || IsTimeUp.Value)
+        if (IsGameFinished.Value || IsTimeUp.Value || IsPaused.Value)
             return;
 
         MemoryLevelData level = levels[currentStageIndex];
@@ -590,7 +701,6 @@ public class MemoryGameManager : MonoBehaviour
     }
 
     #endregion
-
 
     #region Save Progress
 
@@ -666,6 +776,8 @@ public class MemoryGameManager : MonoBehaviour
 
         ResetSavedProgress();
 
+        Time.timeScale = 1f;
+
         StopStageTimer();
 
         currentStageIndex = 0;
@@ -676,7 +788,6 @@ public class MemoryGameManager : MonoBehaviour
     }
 
     #endregion
-
 
     #region Debug Stage Navigation
 
@@ -703,6 +814,8 @@ public class MemoryGameManager : MonoBehaviour
         if (!EnsureLevelsLoaded())
             return;
 
+        Time.timeScale = 1f;
+
         StopStageTimer();
 
         int stageIndex = stageNumber - 1;
@@ -722,8 +835,17 @@ public class MemoryGameManager : MonoBehaviour
 
     #endregion
 
-
     #region Sound
+
+    public void PlayButtonClickSound()
+    {
+        PlaySfx(buttonClickSfx);
+    }
+
+    public void PlayHintRevealSound()
+    {
+        PlaySfx(hintRevealSfx);
+    }
 
     private void PlaySfx(AudioClip clip)
     {

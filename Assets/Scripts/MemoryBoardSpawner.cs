@@ -181,7 +181,7 @@ public class MemoryBoardSpawner : MonoBehaviour
         }
     }
 
-    private async UniTaskVoid ShowRoundHintAsync(int version, CancellationToken token)
+ private async UniTaskVoid ShowRoundHintAsync(int version, CancellationToken token)
 {
     try
     {
@@ -194,6 +194,9 @@ public class MemoryBoardSpawner : MonoBehaviour
 
         if (version != boardVersion)
             return;
+
+        // صوت أول مرة لما يكشف الورق
+        gameManager.PlayHintRevealSound();
 
         List<UniTask> flipUpTasks = new List<UniTask>();
 
@@ -214,6 +217,9 @@ public class MemoryBoardSpawner : MonoBehaviour
 
         if (version != boardVersion)
             return;
+
+        // صوت ثاني لما يرجع يقلب الورق
+        gameManager.PlayHintRevealSound();
 
         List<UniTask> flipDownTasks = new List<UniTask>();
 
